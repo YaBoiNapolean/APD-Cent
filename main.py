@@ -210,5 +210,4 @@ async def strike_check():
         pass
 import os
 
-bot.run(os.environ[MTQ4NjQ4MDk0MTQ1ODI2NDExNA.G9dsr4.H2Apj0_Ryoy45abzMXAKA7G-yFdXshVPwsiges
-])
+bot.run(os.environ['MTQ4NjQ4MDk0MTQ1ODI2NDExNA.G9dsr4.H2Apj0_Ryoy45abzMXAKA7G-yFdXshVPwsiges'])

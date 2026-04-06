@@ -1,220 +1,65 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands, ui
 import aiosqlite
-from datetime import datetime
+import random
+import string
 import os
+from datetime import datetime, timedelta
 
+# --- CONFIGURATION ---
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-DATABASE = 'apd_bot.db'
+DATABASE = 'gsp_bot.db'
 
-# ---------------------
-# CHANNEL IDS
-# ---------------------
+# Colors
+GSP_ORANGE = discord.Color.from_rgb(255, 165, 0)
+GSP_RED = discord.Color.from_rgb(255, 0, 0)
+GSP_NAVY = discord.Color.from_rgb(0, 0, 50)
+
+# Channel IDs (Replace with your actual IDs)
 CHANNELS = {
     'arrest_logs': 1486825085439443125,
     'citation_logs': 1486885813013844148,
-    'apd_commands': 1486886286081130526,
-    'strike_confirm': 1486824029980463206,
-    'medal_requests': 1486846567548715189,
-    'medal_accept': 1486846829122424994,
-    'infractions': 1486847816507719753
+    'infractions': 1486847816507719753,
+    'medal_requests': 1486846567548715189
 }
 
-# ---------------------
-# ROLE IDS
-# ---------------------
+# Role IDs (Replace with your actual IDs)
 ROLES = {
-    'up_for_ban': 1486876910905593866,
-    'strike_2': 1486876780190105630,
     'strike_1': 1486876700242608268,
-    'strike_confirmer': 1486883804550398053,
-    'medal_honor': 1486830867279249490,
-    'medal_valor': 1486830974330343566,
-    'medal_9m': 1486830671681949816,
-    'medal_6m': 1486830562655342612,
-    'medal_3m': 1486830443222401124,
-    'medal_1m': 1486830336842272919
+    'strike_2': 1486876780190105630,
+    'up_for_ban': 1486876910905593866,
+    'strike_confirmer': 1486883804550398053
 }
 
-# ---------------------
-# STARTUP & DB INIT
-# ---------------------
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user}')
-    await init_db()
-    await bot.tree.sync()
-    print('Bot ready.')
+# --- DATABASE & UTILITIES ---
 
 async def init_db():
     async with aiosqlite.connect(DATABASE) as db:
-        await db.execute('''CREATE TABLE IF NOT EXISTS arrests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            officer_id INTEGER,
-            reason TEXT,
-            mugshot TEXT,
-            timestamp TEXT
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS citations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            officer_id INTEGER,
-            reason TEXT,
-            timestamp TEXT
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS warrants (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            officer_id INTEGER,
-            reason TEXT,
-            active INTEGER DEFAULT 1,
-            timestamp TEXT
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS bolos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            officer_id INTEGER,
-            description TEXT,
-            active INTEGER DEFAULT 1,
-            timestamp TEXT
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS infractions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            officer_id INTEGER,
-            reason TEXT,
-            proof TEXT,
-            timestamp TEXT
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS strikes (
-            user_id INTEGER PRIMARY KEY,
-            strike_count INTEGER DEFAULT 0
-        )''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS medals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            medal_type TEXT,
-            approved INTEGER DEFAULT 0,
-            timestamp TEXT
-        )''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS arrests (id INTEGER PRIMARY KEY AUTOINCREMENT, suspect TEXT, officer_id INTEGER, charges TEXT, mugshot TEXT, timestamp TEXT)''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS citations (id INTEGER PRIMARY KEY AUTOINCREMENT, suspect TEXT, officer_id INTEGER, reason TEXT, timestamp TEXT)''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS bolos (id_code TEXT PRIMARY KEY, suspect TEXT, officer_id INTEGER, reason TEXT, vehicle TEXT, plate TEXT, message_id INTEGER, channel_id INTEGER, expiry_timestamp TEXT, timestamp TEXT)''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS warrants (id_code TEXT PRIMARY KEY, suspect TEXT, officer_id INTEGER, reason TEXT, risk_level TEXT, message_id INTEGER, channel_id INTEGER, expiry_timestamp TEXT, timestamp TEXT)''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS infractions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, officer_id INTEGER, reason TEXT, proof TEXT, timestamp TEXT)''')
+        await db.execute('''CREATE TABLE IF NOT EXISTS strikes (user_id INTEGER PRIMARY KEY, strike_count INTEGER DEFAULT 0)''')
         await db.commit()
-    print('Database initialized.')
 
-# ---------------------
-# ARREST LOG
-# ---------------------
-class ArrestModal(ui.Modal, title='Log Arrest'):
-    suspect = ui.TextInput(label='Suspect Name/ID')
-    reason = ui.TextInput(label='Reason', style=discord.TextStyle.paragraph)
-    mugshot = ui.TextInput(label='Mugshot URL (optional)', required=False)
+async def generate_unique_id():
+    async with aiosqlite.connect(DATABASE) as db:
+        while True:
+            num = ''.join(random.choices(string.digits, k=4))
+            new_id = f"GSP{num}"
+            async with db.execute("SELECT 1 FROM bolos WHERE id_code = ? UNION SELECT 1 FROM warrants WHERE id_code = ?", (new_id, new_id)) as cursor:
+                if not await cursor.fetchone():
+                    return new_id
 
-    async def on_submit(self, interaction: discord.Interaction):
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO arrests (user_id, officer_id, reason, mugshot, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (0, interaction.user.id, self.reason.value, self.mugshot.value or 'N/A', ts)
-            )
-            await db.commit()
-        embed = discord.Embed(title='Arrest Logged', color=discord.Color.red())
-        embed.add_field(name='Officer', value=interaction.user.mention)
-        embed.add_field(name='Suspect', value=self.suspect.value)
-        embed.add_field(name='Reason', value=self.reason.value, inline=False)
-        embed.add_field(name='Mugshot', value=self.mugshot.value or 'N/A', inline=False)
-        embed.set_footer(text=ts)
-        channel = bot.get_channel(CHANNELS['arrest_logs'])
-        await channel.send(embed=embed)
-        await interaction.response.send_message('Arrest logged!', ephemeral=True)
+def get_footer(itx: discord.Interaction, action="Logged"):
+    return f"{action} by {itx.user.display_name} | {datetime.utcnow().strftime('%m/%d/%Y')}"
 
-@bot.tree.command(name='arrest_log', description='Log an arrest')
-async def arrest_log(interaction: discord.Interaction):
-    await interaction.response.send_modal(ArrestModal())
+# --- STRIKE SYSTEM ---
 
-# ---------------------
-# CITATION LOG
-# ---------------------
-class CitationModal(ui.Modal, title='Submit Citation'):
-    suspect = ui.TextInput(label='Suspect Name/ID')
-    reason = ui.TextInput(label='Reason', style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO citations (user_id, officer_id, reason, timestamp) VALUES (?, ?, ?, ?)',
-                (0, interaction.user.id, self.reason.value, ts)
-            )
-            await db.commit()
-        embed = discord.Embed(title='Citation Submitted', color=discord.Color.blue())
-        embed.add_field(name='Officer', value=interaction.user.mention)
-        embed.add_field(name='Suspect', value=self.suspect.value)
-        embed.add_field(name='Reason', value=self.reason.value, inline=False)
-        embed.set_footer(text=ts)
-        channel = bot.get_channel(CHANNELS['citation_logs'])
-        await channel.send(embed=embed)
-        await interaction.response.send_message('Citation submitted!', ephemeral=True)
-
-@bot.tree.command(name='citation_submit', description='Submit a citation')
-async def citation_submit(interaction: discord.Interaction):
-    await interaction.response.send_modal(CitationModal())
-
-# ---------------------
-# WARRANT
-# ---------------------
-class WarrantModal(ui.Modal, title='Submit Warrant'):
-    suspect = ui.TextInput(label='Suspect Name/ID')
-    reason = ui.TextInput(label='Reason', style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO warrants (user_id, officer_id, reason, timestamp) VALUES (?, ?, ?, ?)',
-                (0, interaction.user.id, self.reason.value, ts)
-            )
-            await db.commit()
-        embed = discord.Embed(title='Warrant Submitted', color=discord.Color.orange())
-        embed.add_field(name='Officer', value=interaction.user.mention)
-        embed.add_field(name='Suspect', value=self.suspect.value)
-        embed.add_field(name='Reason', value=self.reason.value, inline=False)
-        embed.set_footer(text=ts)
-        await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name='warrant_submit', description='Submit a warrant')
-async def warrant_submit(interaction: discord.Interaction):
-    await interaction.response.send_modal(WarrantModal())
-
-# ---------------------
-# BOLO
-# ---------------------
-class BoloModal(ui.Modal, title='Submit BOLO'):
-    description = ui.TextInput(label='Description', style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO bolos (officer_id, description, timestamp) VALUES (?, ?, ?)',
-                (interaction.user.id, self.description.value, ts)
-            )
-            await db.commit()
-        embed = discord.Embed(title='BOLO Submitted', color=discord.Color.gold())
-        embed.add_field(name='Officer', value=interaction.user.mention)
-        embed.add_field(name='Description', value=self.description.value, inline=False)
-        embed.set_footer(text=ts)
-        await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name='bolo_submit', description='Submit a BOLO')
-async def bolo_submit(interaction: discord.Interaction):
-    await interaction.response.send_modal(BoloModal())
-
-# ---------------------
-# INFRACTION / STRIKE
-# ---------------------
 class StrikeConfirmView(ui.View):
     def __init__(self, user_id: int, reason: str):
         super().__init__(timeout=None)
@@ -222,130 +67,169 @@ class StrikeConfirmView(ui.View):
         self.reason = reason
 
     @ui.button(label='Confirm Strike', style=discord.ButtonStyle.danger)
-    async def confirm_strike(self, interaction: discord.Interaction, button: ui.Button):
+    async def confirm_strike(self, itx: discord.Interaction, button: ui.Button):
+        confirmer_role = itx.guild.get_role(ROLES['strike_confirmer'])
+        if confirmer_role not in itx.user.roles:
+            await itx.response.send_message("Unauthorized.", ephemeral=True)
+            return
+
         async with aiosqlite.connect(DATABASE) as db:
             cursor = await db.execute('SELECT strike_count FROM strikes WHERE user_id = ?', (self.user_id,))
             row = await cursor.fetchone()
-            if row:
-                count = row[0] + 1
-                await db.execute('UPDATE strikes SET strike_count = ? WHERE user_id = ?', (count, self.user_id))
-            else:
-                count = 1
-                await db.execute('INSERT INTO strikes VALUES (?, ?)', (self.user_id, count))
+            count = (row[0] + 1) if row else 1
+            await db.execute('INSERT OR REPLACE INTO strikes (user_id, strike_count) VALUES (?, ?)', (self.user_id, count))
             await db.commit()
 
-        guild = interaction.guild
-        member = guild.get_member(self.user_id)
-
+        member = itx.guild.get_member(self.user_id)
         if member:
-            if count == 1:
-                await member.add_roles(guild.get_role(ROLES['strike_1']))
-            elif count == 2:
-                await member.remove_roles(guild.get_role(ROLES['strike_1']))
-                await member.add_roles(guild.get_role(ROLES['strike_2']))
+            s1, s2, ban = [itx.guild.get_role(ROLES[r]) for r in ['strike_1', 'strike_2', 'up_for_ban']]
+            if count == 1: await member.add_roles(s1)
+            elif count == 2: 
+                await member.remove_roles(s1)
+                await member.add_roles(s2)
             elif count >= 3:
-                await member.remove_roles(guild.get_role(ROLES['strike_2']))
-                await member.add_roles(guild.get_role(ROLES['up_for_ban']))
+                await member.remove_roles(s2)
+                await member.add_roles(ban)
 
-        infra_channel = bot.get_channel(CHANNELS['infractions'])
-        await infra_channel.send(f'<@{self.user_id}> now has {count} strike(s). Reason: {self.reason}')
-        await interaction.response.edit_message(content=f'Strike confirmed for <@{self.user_id}>', view=None)
+        await itx.response.edit_message(content=f"✅ Strike {count} confirmed for <@{self.user_id}>.", view=None, embed=None)
 
-    @ui.button(label='Cancel', style=discord.ButtonStyle.gray)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.edit_message(content='Strike cancelled.', view=None)
+# --- SLASH COMMANDS ---
 
-class InfractionModal(ui.Modal, title='Log Infraction'):
-    user_id = ui.TextInput(label='Officer User ID')
-    reason = ui.TextInput(label='Reason', style=discord.TextStyle.paragraph)
-    proof = ui.TextInput(label='Proof URL (optional)', required=False)
+@bot.tree.command(name='arrest_log', description='Log a GSP arrest')
+async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, mugshot_url: str = None):
+    ts = datetime.utcnow().strftime('%B %d, %Y at %H:%M')
+    embed = discord.Embed(title="Arrest", color=GSP_ORANGE)
+    embed.set_author(name="Georgia State Patrol")
+    embed.add_field(name="Suspect", value=suspect, inline=False)
+    embed.add_field(name="Charges", value=charges, inline=False)
+    embed.add_field(name="Date", value=ts, inline=False)
+    if mugshot_url: embed.set_image(url=mugshot_url)
+    embed.set_footer(text=get_footer(itx))
+    
+    chan = bot.get_channel(CHANNELS['arrest_logs'])
+    if chan: await chan.send(embed=embed)
+    await itx.response.send_message("Arrest logged.", ephemeral=True)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            uid = int(self.user_id.value)
-        except ValueError:
-            await interaction.response.send_message('Invalid user ID.', ephemeral=True)
-            return
+@bot.tree.command(name='bolo_issue', description='Issue a BOLO with expiration')
+@app_commands.choices(expires=[
+    app_commands.Choice(name="24 Hours", value=24),
+    app_commands.Choice(name="48 Hours", value=48),
+    app_commands.Choice(name="72 Hours", value=72),
+    app_commands.Choice(name="1 Week", value=168)
+])
+async def bolo_issue(itx: discord.Interaction, suspect: str, reason: str, vehicle: str, plate: str, expires: app_commands.Choice[int]):
+    id_code = await generate_unique_id()
+    expiry_dt = datetime.utcnow() + timedelta(hours=expires.value)
+    
+    embed = discord.Embed(title="BOLO", color=GSP_RED)
+    embed.set_author(name="Georgia State Patrol")
+    embed.add_field(name="Suspect", value=suspect, inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Vehicle", value=vehicle, inline=True)
+    embed.add_field(name="Plate", value=plate, inline=True)
+    embed.add_field(name="Expires", value=expiry_dt.strftime('%B %d, %Y at %H:%M'), inline=False)
+    embed.set_footer(text=f"ID: {id_code} | {get_footer(itx)}")
 
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO infractions (user_id, officer_id, reason, proof, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (uid, interaction.user.id, self.reason.value, self.proof.value or 'N/A', ts)
-            )
-            await db.commit()
+    await itx.response.send_message(embed=embed)
+    res = await itx.original_response()
 
-        embed = discord.Embed(title='Infraction - Strike Pending', color=discord.Color.orange())
-        embed.add_field(name='Officer', value=f'<@{uid}>')
-        embed.add_field(name='Reason', value=self.reason.value, inline=False)
-        embed.add_field(name='Proof', value=self.proof.value or 'N/A', inline=False)
-        await interaction.response.send_message(
-            embed=embed,
-            view=StrikeConfirmView(uid, self.reason.value)
-        )
+    async with aiosqlite.connect(DATABASE) as db:
+        await db.execute("INSERT INTO bolos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id_code, suspect, itx.user.id, reason, vehicle, plate, res.id, itx.channel_id, expiry_dt.isoformat(), datetime.utcnow().isoformat()))
+        await db.commit()
 
-@bot.tree.command(name='infraction_log', description='Log an infraction and issue a strike')
-async def infraction_log(interaction: discord.Interaction):
-    await interaction.response.send_modal(InfractionModal())
+@bot.tree.command(name='warrant_submit', description='Submit an Arrest Warrant with expiration')
+@app_commands.choices(expires=[
+    app_commands.Choice(name="24 Hours", value=24),
+    app_commands.Choice(name="48 Hours", value=48),
+    app_commands.Choice(name="72 Hours", value=72),
+    app_commands.Choice(name="1 Week", value=168)
+])
+async def warrant_submit(itx: discord.Interaction, suspect: str, risk_level: str, reason: str, expires: app_commands.Choice[int]):
+    id_code = await generate_unique_id()
+    expiry_dt = datetime.utcnow() + timedelta(hours=expires.value)
+    
+    embed = discord.Embed(title="Arrest Warrant", color=GSP_RED)
+    embed.set_author(name="Georgia State Patrol")
+    embed.add_field(name="Suspect", value=suspect, inline=False)
+    embed.add_field(name="Risk Level", value=risk_level, inline=True)
+    embed.add_field(name="Expires", value=expiry_dt.strftime('%B %d, %Y at %H:%M'), inline=True)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"ID: {id_code} | {get_footer(itx)}")
 
-# ---------------------
-# MEDAL SYSTEM
-# ---------------------
-class MedalAcceptView(ui.View):
-    def __init__(self, user_id: int, medal_type: str):
-        super().__init__(timeout=None)
-        self.user_id = user_id
-        self.medal_type = medal_type
+    await itx.response.send_message(embed=embed)
+    res = await itx.original_response()
 
-    @ui.button(label='Approve Medal', style=discord.ButtonStyle.green)
-    async def approve(self, interaction: discord.Interaction, button: ui.Button):
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'UPDATE medals SET approved = 1 WHERE user_id = ? AND medal_type = ?',
-                (self.user_id, self.medal_type)
-            )
-            await db.commit()
-        role = interaction.guild.get_role(ROLES.get(f'medal_{self.medal_type.lower()}'))
-        if role:
-            member = interaction.guild.get_member(self.user_id)
-            if member:
-                await member.add_roles(role)
-        await interaction.response.edit_message(
-            content=f'Medal {self.medal_type} approved for <@{self.user_id}>',
-            view=None
-        )
+    async with aiosqlite.connect(DATABASE) as db:
+        await db.execute("INSERT INTO warrants VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id_code, suspect, itx.user.id, reason, risk_level, res.id, itx.channel_id, expiry_dt.isoformat(), datetime.utcnow().isoformat()))
+        await db.commit()
 
-    @ui.button(label='Deny Medal', style=discord.ButtonStyle.red)
-    async def deny(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.edit_message(
-            content=f'Medal denied for <@{self.user_id}>',
-            view=None
-        )
+@bot.tree.command(name='search_user', description='Search all active records for a specific suspect')
+async def search_user(itx: discord.Interaction, name: str):
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DATABASE) as db:
+        c_w = await db.execute("SELECT id_code FROM warrants WHERE suspect = ? AND expiry_timestamp > ?", (name, now))
+        warrants = await c_w.fetchall()
+        c_b = await db.execute("SELECT id_code FROM bolos WHERE suspect = ? AND expiry_timestamp > ?", (name, now))
+        bolos = await c_b.fetchall()
 
-class MedalModal(ui.Modal, title='Request Medal'):
-    medal_type = ui.TextInput(label='Medal Type (honor, valor, 1m, 3m, 6m, 9m)')
-    reason = ui.TextInput(label='Reason', style=discord.TextStyle.paragraph)
-    proof = ui.TextInput(label='Proof URL (optional)', required=False)
+    embed = discord.Embed(title=f"Search Results for {name}", color=discord.Color.dark_grey())
+    embed.add_field(name="Warrants", value=f"{'✅ 0 active' if not warrants else '⚠️ ' + ', '.join([w[0] for w in warrants])}", inline=False)
+    embed.add_field(name="BOLOs", value=f"{'✅ 0 active' if not bolos else '🚨 ' + ', '.join([b[0] for b in bolos])}", inline=False)
+    embed.set_footer(text=f"GSP Database Query")
+    await itx.response.send_message(embed=embed)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        ts = datetime.utcnow().isoformat()
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(
-                'INSERT INTO medals (user_id, medal_type, timestamp) VALUES (?, ?, ?)',
-                (interaction.user.id, self.medal_type.value, ts)
-            )
-            await db.commit()
-        embed = discord.Embed(title='Medal Request', color=0x000c77)
-        embed.add_field(name='Officer', value=interaction.user.mention)
-        embed.add_field(name='Medal', value=self.medal_type.value)
-        embed.add_field(name='Reason', value=self.reason.value, inline=False)
-        embed.add_field(name='Proof', value=self.proof.value or 'N/A', inline=False)
-        channel = bot.get_channel(CHANNELS['medal_requests'])
-        await channel.send(embed=embed, view=MedalAcceptView(interaction.user.id, self.medal_type.value))
-        await interaction.response.send_message('Medal request submitted!', ephemeral=True)
+@bot.tree.command(name='search_active', description='View all globally active GSP records')
+async def search_active(itx: discord.Interaction):
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DATABASE) as db:
+        c_w = await db.execute("SELECT suspect, id_code FROM warrants WHERE expiry_timestamp > ?", (now,))
+        w_records = await c_w.fetchall()
+        c_b = await db.execute("SELECT suspect, id_code FROM bolos WHERE expiry_timestamp > ?", (now,))
+        b_records = await c_b.fetchall()
 
-@bot.tree.command(name='request_medal', description='Request a medal')
-async def request_medal(interaction: discord.Interaction):
-    await interaction.response.send_modal(MedalModal())
+    unique_suspects = set([r[0] for r in w_records] + [r[0] for r in b_records])
+    embed = discord.Embed(title="Active Warrants/BOLOs In-Game", color=GSP_RED)
+    embed.description = f"Found **{len(unique_suspects)}** player(s) with active records."
 
-bot.run(os.environ['DISCORD_TOKEN'])
+    for i, suspect in enumerate(unique_suspects, 1):
+        recs = [f"Warrant `{w[1]}`" for w in w_records if w[0] == suspect] + [f"BOLO `{b[1]}`" for b in b_records if b[0] == suspect]
+        embed.add_field(name=f"{i}. {suspect}", value=f"⚠️ {' • '.join(recs)}", inline=False)
+
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name='clear_record', description='Wipe a record from existence via ID')
+async def clear_record(itx: discord.Interaction, id_code: str):
+    id_code = id_code.upper()
+    async with aiosqlite.connect(DATABASE) as db:
+        for table in ['warrants', 'bolos']:
+            cursor = await db.execute(f"SELECT message_id, channel_id FROM {table} WHERE id_code = ?", (id_code,))
+            row = await cursor.fetchone()
+            if row:
+                await db.execute(f"DELETE FROM {table} WHERE id_code = ?", (id_code,))
+                await db.commit()
+                try:
+                    msg = await bot.get_channel(row[1]).fetch_message(row[0])
+                    await msg.delete()
+                except: pass
+                await itx.response.send_message(f"✅ Record {id_code} cleared.", ephemeral=True)
+                return
+    await itx.response.send_message("ID not found.", ephemeral=True)
+
+@bot.tree.command(name='infraction_log', description='Log an officer infraction')
+async def infraction_log(itx: discord.Interaction, officer: discord.Member, reason: str, proof: str = "N/A"):
+    embed = discord.Embed(title="Internal Affairs - Infraction", color=GSP_RED)
+    embed.set_author(name="Georgia State Patrol")
+    embed.add_field(name="Officer", value=officer.mention, inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Proof", value=proof, inline=False)
+    await itx.response.send_message(embed=embed, view=StrikeConfirmView(officer.id, reason))
+
+@bot.event
+async def on_ready():
+    await init_db()
+    await bot.tree.sync()
+    print(f'GSP Bot Online: {bot.user}')
+
+bot.run(os.environ.get('DISCORD_TOKEN'))

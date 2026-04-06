@@ -61,6 +61,7 @@ async def on_ready():
     weekly_reset.start()
     promotion_check.start()
     strike_check.start()
+    await bot.tree.sync()
     print('Scheduled tasks started.')
 
 async def init_db():

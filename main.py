@@ -19,7 +19,7 @@ GSP_YELLOW = 0xFFFF00
 GSP_RED = discord.Color.red()
 GSP_NAVY = discord.Color.from_rgb(0, 0, 50)
 
-# Updated with your specific IDs
+# IDs - Ensure these match your server
 CHANNELS = {
     'arrest_logs': 1486825085439443125,
     'citation_logs': 1486885813013844148,
@@ -57,6 +57,17 @@ async def generate_unique_id():
             async with db.execute("SELECT 1 FROM bolos WHERE id_code = ? UNION SELECT 1 FROM warrants WHERE id_code = ?", (new_id, new_id)) as cursor:
                 if not await cursor.fetchone():
                     return new_id
+
+# --- BACKGROUND TASKS ---
+
+@tasks.loop(hours=1)
+async def cleanup_expired_records():
+    """Removes expired BOLOs and Warrants from the DB automatically."""
+    now = (datetime.utcnow() - timedelta(hours=8)).isoformat()
+    async with aiosqlite.connect(DATABASE) as db:
+        await db.execute("DELETE FROM bolos WHERE expiry_timestamp < ?", (now,))
+        await db.execute("DELETE FROM warrants WHERE expiry_timestamp < ?", (now,))
+        await db.commit()
 
 # --- STRIKE SYSTEM ---
 
@@ -193,6 +204,41 @@ async def warrant_submit(itx: discord.Interaction, suspect: str, risk_level: str
             (id_code, suspect, itx.user.id, reason, risk_level, res.id, itx.channel_id, expiry_dt.isoformat(), ts))
         await db.commit()
 
+@bot.tree.command(name='search_active', description='View all currently active Warrants and BOLOs')
+async def search_active(itx: discord.Interaction):
+    now_pst = (datetime.utcnow() - timedelta(hours=8)).isoformat()
+    
+    async with aiosqlite.connect(DATABASE) as db:
+        async with db.execute("SELECT suspect, id_code, 'Warrant' FROM warrants WHERE expiry_timestamp > ?", (now_pst,)) as cursor:
+            warrants = await cursor.fetchall()
+        async with db.execute("SELECT suspect, id_code, 'BOLO' FROM bolos WHERE expiry_timestamp > ?", (now_pst,)) as cursor:
+            bolos = await cursor.fetchall()
+
+    all_records = warrants + bolos
+    
+    if not all_records:
+        embed = discord.Embed(description="✅ No active Warrants or BOLO’s", color=GSP_RED)
+        await itx.response.send_message(embed=embed)
+        return
+
+    grouped = {}
+    for suspect, id_code, record_type in all_records:
+        if suspect not in grouped:
+            grouped[suspect] = []
+        grouped[suspect].append(f"{record_type} {id_code}")
+
+    description_lines = [f"Found **{len(grouped)}** player(s) with active records\n"]
+    
+    for i, (suspect, records) in enumerate(grouped.items(), 1):
+        description_lines.append(f"**{i}. {suspect}**")
+        record_str = " • ".join([f"⚠️ {r}" for r in records]) # Plain text IDs
+        description_lines.append(record_str)
+        description_lines.append("Team: Civilian | Vehicles: Unknown")
+        description_lines.append("Location: Unknown\n")
+
+    embed = discord.Embed(title="Active Warrants/BOLOs In-Game", description="\n".join(description_lines), color=GSP_RED)
+    await itx.response.send_message(embed=embed)
+
 @bot.tree.command(name='search_user', description='Search NCIC Database')
 @app_commands.describe(name="Player name to look up")
 async def search_user(itx: discord.Interaction, name: str):
@@ -207,7 +253,7 @@ async def search_user(itx: discord.Interaction, name: str):
         c_a = await db.execute("SELECT COUNT(*) FROM arrests WHERE suspect = ?", (name,))
         arrest_count = (await c_a.fetchone())[0]
 
-    embed = discord.Embed(title=f"NCIC Query: {name}", color=GSP_NAVY)
+    embed = discord.Embed(title=f"NCIC Query: {name}", color=GSP_ORANGE)
     embed.add_field(name="Active Warrants", value=f"**{'✅ Clear' if not warrants else ', '.join([w[0] for w in warrants])}**", inline=False)
     embed.add_field(name="Active BOLOs", value=f"**{'✅ Clear' if not bolos else ', '.join([b[0] for b in bolos])}**", inline=False)
     embed.add_field(name="Total Arrests", value=f"**{arrest_count}**", inline=True)
@@ -215,10 +261,7 @@ async def search_user(itx: discord.Interaction, name: str):
     if citations:
         last_dt = datetime.strptime(citations[0][1], '%B %d, %Y at %H:%M')
         diff = now_pst - last_dt
-        if diff.days > 0: time_ago = f"{diff.days}d ago"
-        elif diff.seconds // 3600 > 0: time_ago = f"{diff.seconds // 3600}h ago"
-        else: time_ago = f"{diff.seconds // 60}m ago"
-        
+        time_ago = f"{diff.days}d ago" if diff.days > 0 else f"{diff.seconds // 3600}h ago"
         embed.add_field(name="Last Citation", value=f"**{time_ago}**", inline=True)
         embed.add_field(name="Recent History", value="\n".join([f"• {c[0]}" for c in citations[:3]]), inline=False)
     else:
@@ -229,7 +272,7 @@ async def search_user(itx: discord.Interaction, name: str):
 @bot.tree.command(name='infraction_log', description='Log officer infraction')
 @app_commands.describe(officer="Member to strike", reason="Policy violated", proof="Evidence link")
 async def infraction_log(itx: discord.Interaction, officer: discord.Member, reason: str, proof: str = "N/A"):
-    embed = discord.Embed(title="Internal Affairs - Infraction", color=GSP_RED)
+    embed = discord.Embed(title="Internal Affairs - Infraction", color=GSP_ORANGE)
     embed.add_field(name="Officer", value=f"**{officer.mention}**", inline=False)
     embed.add_field(name="Reason", value=f"**{reason}**", inline=False)
     embed.add_field(name="Proof", value=f"**{proof}**", inline=False)
@@ -242,6 +285,8 @@ async def infraction_log(itx: discord.Interaction, officer: discord.Member, reas
 async def on_ready():
     await init_db()
     await bot.tree.sync()
+    if not cleanup_expired_records.is_running():
+        cleanup_expired_records.start()
     print(f'GSP Bot Online: {bot.user}')
 
 bot.run(os.environ.get('DISCORD_TOKEN'))

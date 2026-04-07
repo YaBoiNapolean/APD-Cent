@@ -5,7 +5,6 @@ from discord import app_commands, ui
 import aiosqlite
 import random
 import string
-import os
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -219,6 +218,29 @@ async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk_
             await db.commit()
         await itx_s.response.send_message(embed=embed)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpirySelect(callback)), ephemeral=True)
+
+@bot.tree.command(name="search_user", description="Get detailed info about a server member")
+@app_commands.describe(trooper="The member to search for")
+async def search_user(itx: discord.Interaction, trooper: discord.Member):
+    if not await is_cmd_channel(itx): return
+    
+    embed = discord.Embed(title=f"👤 **USER PROFILE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
+    embed.set_thumbnail(url=trooper.display_avatar.url)
+    
+    # Format dates
+    joined_date = trooper.joined_at.strftime("%B %d, %Y") if trooper.joined_at else "Unknown"
+    created_date = trooper.created_at.strftime("%B %d, %Y")
+    
+    embed.description = (
+        f"{SEPARATOR}\n\n"
+        f"**Mention:** {trooper.mention}\n"
+        f"**User ID:** `{trooper.id}`\n"
+        f"**Top Role:** {trooper.top_role.mention}\n"
+        f"**Joined GSP:** {joined_date}\n"
+        f"**Account Created:** {created_date}\n\n"
+        f"{SEPARATOR}"
+    )
+    await itx.response.send_message(embed=embed)
 
 @bot.tree.command(name='trooper_performance', description='Trooper statistics')
 async def trooper_performance(itx: discord.Interaction, trooper: discord.Member):

@@ -13,8 +13,13 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 DATABASE = 'gsp_bot.db'
 GSP_CUSTOM_ORANGE = discord.Color.from_str("#ff640f")
+GSP_RED = discord.Color.red() 
 GSP_YELLOW = 0xFFFF00 
-GSP_RED = discord.Color.red()
+GSP_SOFT_RED = discord.Color.from_str("#ff7f7f") 
+
+# 🚨 IMPORTANT: Update these IDs when you move to the new server!
+# This locks the command input to your specific APD commands channel.
+CMD_CHANNEL_ID = 1486886286081130526 
 
 CHANNELS = {
     'arrest_logs': 1486825085439443125,
@@ -54,8 +59,8 @@ async def generate_unique_id():
                     return new_id
 
 async def is_cmd_channel(itx: discord.Interaction):
-    if itx.channel.name.lower() != "gsp-commands":
-        await itx.response.send_message("❌ This command can only be used in the **#gsp-commands** channel.", ephemeral=True)
+    if itx.channel.id != CMD_CHANNEL_ID:
+        await itx.response.send_message(f"❌ This command can only be used in <#{CMD_CHANNEL_ID}>.", ephemeral=True)
         return False
     return True
 
@@ -71,50 +76,19 @@ class ResetConfirmView(ui.View):
             for table in ['arrests', 'citations', 'bolos', 'warrants', 'infractions']:
                 await db.execute(f"DELETE FROM {table}")
             await db.commit()
-        await itx.response.edit_message(content="⚠️ **DATABASE WIPED.** All history cleared.", view=None)
+        await itx.response.edit_message(content="⚠️ **DATABASE WIPED.** All logs cleared.", view=None)
 
     @ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
     async def cancel_reset(self, itx: discord.Interaction, button: ui.Button):
         await itx.response.edit_message(content="❌ Data wipe cancelled.", view=None)
 
-class StrikeActionView(ui.View):
-    def __init__(self, target_id: int, infraction_ids: list):
-        super().__init__(timeout=None)
-        self.target_id = target_id
-        self.infraction_ids = infraction_ids
-
-    @ui.button(label='Confirm Strike', style=discord.ButtonStyle.danger)
-    async def confirm(self, itx: discord.Interaction, button: ui.Button):
-        conf_role = itx.guild.get_role(ROLES['strike_confirmer'])
-        if conf_role not in itx.user.roles:
-            return await itx.response.send_message("Unauthorized.", ephemeral=True)
-        member = itx.guild.get_member(self.target_id)
-        s1, s2, ban = [itx.guild.get_role(ROLES[r]) for r in ['strike_1', 'strike_2', 'up_for_ban']]
-        if s2 in member.roles:
-            await member.add_roles(ban); status = "Up for Ban"
-        elif s1 in member.roles:
-            await member.add_roles(s2); await member.remove_roles(s1); status = "Strike 2"
-        else:
-            await member.add_roles(s1); status = "Strike 1"
-        async with aiosqlite.connect(DATABASE) as db:
-            placeholders = ','.join(['?'] * len(self.infraction_ids))
-            await db.execute(f"UPDATE infractions SET is_active = 0 WHERE id IN ({placeholders})", self.infraction_ids)
-            await db.commit()
-        await itx.response.edit_message(content=f"✅ Strike confirmed for {member.mention}. Status: **{status}**.", embed=None, view=None)
-
-    @ui.button(label='Deny', style=discord.ButtonStyle.secondary)
-    async def deny(self, itx: discord.Interaction, button: ui.Button):
-        conf_role = itx.guild.get_role(ROLES['strike_confirmer'])
-        if conf_role not in itx.user.roles: return await itx.response.send_message("Unauthorized.", ephemeral=True)
-        await itx.message.delete()
-
 # --- COMMANDS ---
 
-@bot.tree.command(name='arrest_log')
+@bot.tree.command(name='arrest_log', description='Log a suspect arrest')
 async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, secondaries: str = "None", mugshot_url: str = "None"):
     if not await is_cmd_channel(itx): return
-    id_code = await generate_unique_id()
-    ts = get_pst_time()
+    id_code = await generate_unique_id(); ts = get_pst_time()
+    
     embed = discord.Embed(title="Arrest", color=GSP_CUSTOM_ORANGE)
     mugshot_link = f"[Click for Full Screen]({mugshot_url})" if mugshot_url != "None" else "None"
     embed.description = (f"**___________________________________**\n\n**ID:** {id_code}\n**Primary Officer:** {itx.user.mention}\n"
@@ -122,47 +96,92 @@ async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, secon
                          f"**Mugshot:** {mugshot_link}\n\n**Date:** {ts}")
     if mugshot_url != "None": embed.set_image(url=mugshot_url)
     embed.set_footer(text=f"Logged by {itx.user.display_name}")
+    
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO arrests VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, secondaries, charges, mugshot_url, ts))
         await db.commit()
+        
     await bot.get_channel(CHANNELS['arrest_logs']).send(embed=embed)
-    await itx.response.send_message("✅ Arrest logged.", ephemeral=True)
+    await itx.response.send_message("✅ Arrest has been logged in the proper channel.", ephemeral=True)
 
-@bot.tree.command(name='citation_log')
+@bot.tree.command(name='citation_log', description='Log a citation')
 async def citation_log(itx: discord.Interaction, suspect: str, vehicle: str, location: str, reason: str):
     if not await is_cmd_channel(itx): return
     id_code = await generate_unique_id(); ts = get_pst_time()
-    embed = discord.Embed(title="Citation Issued", color=GSP_CUSTOM_ORANGE)
+    
+    embed = discord.Embed(title="Citation Issued", color=GSP_YELLOW)
     embed.description = (f"**___________________________________**\n\n**ID:** {id_code}\n**Officer:** {itx.user.mention}\n"
                          f"**Suspect:** {suspect}\n**Vehicle:** {vehicle}\n**Location:** {location}\n**Reason:** {reason}\n\n**Date:** {ts}")
+    
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO citations VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, vehicle, location, reason, ts))
         await db.commit()
+        
     await bot.get_channel(CHANNELS['citation_logs']).send(embed=embed)
-    await itx.response.send_message("✅ Citation logged.", ephemeral=True)
+    await itx.response.send_message("✅ Citation has been logged in the proper channel.", ephemeral=True)
 
-@bot.tree.command(name='infraction_log')
-async def infraction_log(itx: discord.Interaction, officer: discord.Member, reason: str, punishment: str, proof: str):
+@bot.tree.command(name='bolo_log', description='Issue a BOLO')
+async def bolo_log(itx: discord.Interaction, suspect: str, vehicle: str, reason: str, plate: str = "Unknown"):
     if not await is_cmd_channel(itx): return
-    ts = get_pst_time()
-    embed = discord.Embed(title="Department of Justice - Infraction", color=GSP_CUSTOM_ORANGE)
-    embed.description = (f"**___________________________________**\n\n**Officer:** {officer.mention}\n**Reason:** {reason}\n"
-                         f"**Punishment:** {punishment}\n**Proof:** {proof}\n**Appealable:** ✅\n\n**Signed:** {itx.user.mention}")
-    msg = await bot.get_channel(CHANNELS['infractions']).send(embed=embed)
+    id_code = await generate_unique_id(); ts = get_pst_time()
+    
+    embed = discord.Embed(title=f"BOLO: {suspect}", color=GSP_RED)
+    embed.description = (f"**___________________________________**\n\n**ID:** {id_code}\n**Reason:** {reason}\n"
+                         f"**Vehicle:** {vehicle}\n**Plate:** {plate}\n\n**Expires:** 24 Hours\n**Issued by:** {itx.user.mention}")
+    
     async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("INSERT INTO infractions (user_id, issuer_id, reason, punishment, proof, msg_url, timestamp) VALUES (?,?,?,?,?,?,?)",
-                         (officer.id, itx.user.id, reason, punishment, proof, msg.jump_url, ts))
+        expiry = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+        await db.execute("INSERT INTO bolos VALUES (?,?,?,?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, reason, vehicle, plate, 0, 0, expiry, ts))
         await db.commit()
-        async with db.execute("SELECT id, msg_url FROM infractions WHERE user_id = ? AND is_active = 1", (officer.id,)) as cursor:
-            active = await cursor.fetchall()
-            if len(active) >= 3:
-                links = "\n".join([f"• [Infraction #{r[0]}]({r[1]})" for r in active[:3]])
-                c_embed = discord.Embed(title="Strike Confirmation", color=GSP_RED)
-                c_embed.description = f"**___________________________________**\n\n**User:** {officer.mention}\n\n**Active Infractions:**\n{links}"
-                await bot.get_channel(CHANNELS['strike_confirm']).send(embed=c_embed, view=StrikeActionView(officer.id, [r[0] for r in active[:3]]))
-    await itx.response.send_message("✅ Infraction logged.", ephemeral=True)
+        
+    await itx.response.send_message(embed=embed)
 
-@bot.tree.command(name='trooper_performance')
+@bot.tree.command(name='warrant_log', description='Issue a Warrant')
+async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk_level: str = "Standard"):
+    if not await is_cmd_channel(itx): return
+    id_code = await generate_unique_id(); ts = get_pst_time()
+    
+    embed = discord.Embed(title=f"WARRANT: {suspect}", color=GSP_RED)
+    embed.description = (f"**___________________________________**\n\n**ID:** {id_code}\n**Risk Level:** {risk_level}\n"
+                         f"**Reason:** {reason}\n\n**Expires:** 7 Days\n**Issued by:** {itx.user.mention}")
+    
+    async with aiosqlite.connect(DATABASE) as db:
+        expiry = (datetime.utcnow() + timedelta(days=7)).isoformat()
+        await db.execute("INSERT INTO warrants VALUES (?,?,?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, reason, risk_level, 0, 0, expiry, ts))
+        await db.commit()
+        
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name='search_user', description='NCIC lookup for a specific citizen')
+@app_commands.describe(name="The full name of the citizen to search")
+async def search_user(itx: discord.Interaction, name: str):
+    if not await is_cmd_channel(itx): return
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DATABASE) as db:
+        async with db.execute("SELECT COUNT(*) FROM warrants WHERE suspect = ? AND expiry_timestamp > ?", (name, now)) as c: w_c = (await c.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM bolos WHERE suspect = ? AND expiry_timestamp > ?", (name, now)) as c: b_c = (await c.fetchone())[0]
+        async with db.execute("SELECT timestamp FROM arrests WHERE suspect = ? ORDER BY timestamp DESC LIMIT 1", (name,)) as c: last = await c.fetchone()
+    
+    embed = discord.Embed(title=f"NCIC Results: {name}", color=GSP_CUSTOM_ORANGE)
+    embed.description = (f"**___________________________________**\n\n**Active Warrants:** {'✅ 0' if w_c == 0 else f'🚨 {w_c}'}\n"
+                         f"**Active BOLOs:** {'✅ 0' if b_c == 0 else f'⚠️ {b_c}'}\n**Last Arrest:** {last[0] if last else 'No Record Found'}")
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name='search_active', description='List all active BOLOs and Warrants')
+async def search_active(itx: discord.Interaction):
+    if not await is_cmd_channel(itx): return
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DATABASE) as db:
+        async with db.execute("SELECT suspect, reason FROM warrants WHERE expiry_timestamp > ?", (now,)) as cur: warrants = await cur.fetchall()
+        async with db.execute("SELECT suspect, vehicle, reason FROM bolos WHERE expiry_timestamp > ?", (now,)) as cur: bolos = await cur.fetchall()
+    
+    embed = discord.Embed(title="Active NCIC Database", color=GSP_RED)
+    w_list = "\n".join([f"• **{w[0]}**: {w[1]}" for w in warrants]) if warrants else "None"
+    b_list = "\n".join([f"• **{b[0]}** ({b[1]}): {b[2]}" for b in bolos]) if bolos else "None"
+    embed.description = f"**___________________________________**\n\n### 🚨 ACTIVE WARRANTS\n{w_list}\n\n### ⚠️ ACTIVE BOLOs\n{b_list}"
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name='trooper_performance', description='View Trooper statistics')
 async def trooper_performance(itx: discord.Interaction, trooper: discord.Member):
     if not await is_cmd_channel(itx): return
     async with aiosqlite.connect(DATABASE) as db:
@@ -186,27 +205,17 @@ async def trooper_performance(itx: discord.Interaction, trooper: discord.Member)
                          f"**Current Strikes:** {strike}\n\n**Status:** {'Good Standing' if inf == 0 else '⚠️ Monitoring'}")
     await itx.response.send_message(embed=embed)
 
-@bot.tree.command(name='search_user')
-async def search_user(itx: discord.Interaction, name: str):
-    if not await is_cmd_channel(itx): return
-    now = (datetime.utcnow() - timedelta(hours=8)).isoformat()
-    async with aiosqlite.connect(DATABASE) as db:
-        async with db.execute("SELECT COUNT(*) FROM warrants WHERE suspect = ? AND expiry_timestamp > ?", (name, now)) as c: w_c = (await c.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM bolos WHERE suspect = ? AND expiry_timestamp > ?", (name, now)) as c: b_c = (await c.fetchone())[0]
-        async with db.execute("SELECT timestamp FROM arrests WHERE suspect = ? ORDER BY timestamp DESC LIMIT 1", (name,)) as c: last = await c.fetchone()
-    embed = discord.Embed(title=f"NCIC Results: {name}", color=GSP_CUSTOM_ORANGE)
-    embed.description = (f"**___________________________________**\n\n**Warrants:** {'✅ 0' if w_c == 0 else f'⚠️ {w_c}'}\n"
-                         f"**BOLOs:** {'✅ 0' if b_c == 0 else f'⚠️ {b_c}'}\n**Last Arrest:** {last[0] if last else 'None'}")
-    await itx.response.send_message(embed=embed)
-
-@bot.tree.command(name='reset_all_data')
+@bot.tree.command(name='reset_all_data', description='Wipe all database records')
 @app_commands.checks.has_permissions(administrator=True)
 async def reset_all_data(itx: discord.Interaction):
-    await itx.response.send_message("🚨 **WIPE DATABASE?** This action is permanent.", view=ResetConfirmView(), ephemeral=True)
+    embed = discord.Embed(title="🚨 DATABASE WIPE REQUESTED", color=GSP_SOFT_RED)
+    embed.description = "This will permanently delete every log in the database. Continue?"
+    await itx.response.send_message(embed=embed, view=ResetConfirmView(), ephemeral=True)
 
 @bot.event
 async def on_ready():
-    await init_db(); await bot.tree.sync()
+    await init_db()
+    await bot.tree.sync()
     print(f'GSP Bot Online: {bot.user}')
 
 bot.run("YOUR_TOKEN_HERE")

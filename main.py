@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
@@ -247,4 +248,4 @@ async def on_ready():
     await bot.tree.sync()
     print(f'GSP Bot Online | Persistence: {DATABASE}')
 
-bot.run("DISCORD_TOKEN")
+bot.run(os.getenv("DISCORD_TOKEN"))

@@ -247,4 +247,4 @@ async def on_ready():
     await bot.tree.sync()
     print(f'GSP Bot Online | Persistence: {DATABASE}')
 
-bot.run("YOUR_TOKEN_HERE")
+bot.run("DISCORD_TOKEN")

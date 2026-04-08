@@ -25,9 +25,7 @@ CHANNELS = {
     'arrest_logs': 1486825085439443125,
     'citation_logs': 1486885813013844148,
     'infractions': 1486847816507719753,
-    'strike_confirm': 1486824029980463206,
-    'bolo_logs': 1486825085439443125, # Update these if they have unique IDs
-    'warrant_logs': 1486825085439443125
+    'strike_confirm': 1486824029980463206
 }
 
 # Role IDs
@@ -44,7 +42,7 @@ ROLES = {
 def get_pst_time():
     utc_now = datetime.now(timezone.utc)
     pst_now = utc_now - timedelta(hours=8)
-    return pst_now.strftime('%B %d, %Y at %H:%M')
+    return pst_now.strftime('%B % d, %Y at %H:%M')
 
 def format_time_ago(ts_string):
     try:
@@ -348,7 +346,8 @@ async def bolo_log(itx: discord.Interaction, suspect: str, vehicle: str, reason:
         e = discord.Embed(title="**BOLO ACTIVE**", color=GSP_RED)
         e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Vehicle:** {vehicle}\n**Plate:** {plate}\n**Reason:** {reason}\n**Date:** {ts}"
         e.set_footer(text=f"Logged by {itx.user.display_name}")
-        await bot.get_channel(CHANNELS['bolo_logs']).send(embed=e)
+        # Routing to the APD commands channel directly
+        await itx_s.channel.send(embed=e)
         await itx_s.response.send_message(f"✅ BOLO `{id_code}` Issued.", ephemeral=True)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpiryDropdown(post_bolo)), ephemeral=True)
 
@@ -363,7 +362,8 @@ async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk:
         e = discord.Embed(title="**WARRANT ACTIVE**", color=GSP_RED)
         e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Reason:** {reason}\n**Risk Level:** {risk}\n**Date:** {ts}"
         e.set_footer(text=f"Logged by {itx.user.display_name}")
-        await bot.get_channel(CHANNELS['warrant_logs']).send(embed=e)
+        # Routing to the APD commands channel directly
+        await itx_s.channel.send(embed=e)
         await itx_s.response.send_message(f"✅ Warrant `{id_code}` Issued.", ephemeral=True)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpiryDropdown(post_war)), ephemeral=True)
 

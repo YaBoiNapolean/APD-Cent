@@ -8,7 +8,6 @@ import string
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
-# Set to your mounted volume path for persistence
 DATABASE = '/data/gsp_bot.db' 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -38,6 +37,22 @@ ROLES = {
 
 def get_pst_time():
     return (datetime.utcnow() - timedelta(hours=8)).strftime('%B %d, %Y at %H:%M')
+
+def format_time_ago(ts_string):
+    """Calculates how long ago a timestamp occurred for the search_user command."""
+    try:
+        past = datetime.strptime(ts_string, '%B %d, %Y at %H:%M')
+        # Using PST for the 'now' comparison to match get_pst_time format
+        now = datetime.utcnow() - timedelta(hours=8)
+        diff = now - past
+        
+        if diff.days > 30: return f"{diff.days // 30} months ago"
+        if diff.days > 7: return f"{diff.days // 7} weeks ago"
+        if diff.days > 0: return f"{diff.days} days ago"
+        if diff.seconds // 3600 > 0: return f"{diff.seconds // 3600} hours ago"
+        return f"{diff.seconds // 60} minutes ago"
+    except:
+        return "Unknown"
 
 async def init_db():
     async with aiosqlite.connect(DATABASE) as db:
@@ -128,16 +143,91 @@ class ResetConfirmView(ui.View):
 
 # --- COMMANDS ---
 
+@bot.tree.command(name='search_user', description='Search NCIC for a suspects ID')
+@app_commands.describe(user="The name of the suspect you are running")
+async def search_user(itx: discord.Interaction, user: str):
+    if not await is_cmd_channel(itx): return
+    
+    now = datetime.utcnow().isoformat()
+    embed_color = discord.Color.green()
+    
+    async with aiosqlite.connect(DATABASE) as db:
+        # Check active warrants (non-expired)
+        async with db.execute("SELECT id_code, reason FROM warrants WHERE suspect = ? AND expiry_timestamp > ?", (user, now)) as c:
+            warrants = await c.fetchall()
+            
+        # Check active BOLOs (non-expired)
+        async with db.execute("SELECT id_code, reason FROM bolos WHERE suspect = ? AND expiry_timestamp > ?", (user, now)) as c:
+            bolos = await c.fetchall()
+            
+        # Check recency of last arrest
+        async with db.execute("SELECT timestamp FROM arrests WHERE suspect = ? ORDER BY timestamp DESC LIMIT 1", (user,)) as c:
+            last_arrest = await c.fetchone()
+
+    # If active threats found, set color to Red
+    if warrants or bolos:
+        embed_color = discord.Color.red()
+
+    embed = discord.Embed(title=f"🔍 Results for {user}", color=embed_color)
+    
+    # Warrants formatting
+    w_list = ""
+    if warrants:
+        for idx, (wid, reason) in enumerate(warrants, 1):
+            w_list += f"{idx}. ({wid})\n{reason}\n"
+    else:
+        w_list = "✅ No active warrants"
+
+    # BOLO formatting
+    b_list = ""
+    if bolos:
+        for idx, (bid, reason) in enumerate(bolos, 1):
+            b_list += f"{idx}. ({bid})\n{reason}\n"
+    else:
+        b_list = "✅ No active BOLO's"
+
+    # Arrest formatting
+    a_status = "✅ This user has never been arrested"
+    if last_arrest:
+        a_status = format_time_ago(last_arrest[0])
+
+    embed.description = (
+        f"{SEPARATOR}\n\n"
+        f"⚠️ **Active Warrants:**\n{w_list}\n"
+        f"⚠️ **Active BOLO's:**\n{b_list}\n"
+        f"⛓️‍💥 **Recent Arrests:**\n{a_status}\n\n"
+        f"{SEPARATOR}"
+    )
+    
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name="user_info", description="Get detailed info about a server member")
+@app_commands.describe(trooper="The member to search for")
+async def user_info(itx: discord.Interaction, trooper: discord.Member):
+    if not await is_cmd_channel(itx): return
+    embed = discord.Embed(title=f"👤 **USER PROFILE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
+    embed.set_thumbnail(url=trooper.display_avatar.url)
+    joined_date = trooper.joined_at.strftime("%B %d, %Y") if trooper.joined_at else "Unknown"
+    created_date = trooper.created_at.strftime("%B %d, %Y")
+    embed.description = (f"{SEPARATOR}\n\n**Mention:** {trooper.mention}\n**User ID:** `{trooper.id}`\n"
+                         f"**Top Role:** {trooper.top_role.mention}\n**Joined GSP:** {joined_date}\n"
+                         f"**Account Created:** {created_date}\n\n{SEPARATOR}")
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name="info", description="Bot information and bug reporting")
+async def info(itx: discord.Interaction):
+    if not await is_cmd_channel(itx): return
+    embed = discord.Embed(description="If you find any bugs, please DM YaBoi_Napolean.", color=GSP_CUSTOM_ORANGE)
+    await itx.response.send_message(embed=embed)
+
 @bot.tree.command(name='infraction_log', description='Log an infraction and check for 3-strike trigger')
 async def infraction_log(itx: discord.Interaction, trooper: discord.Member, reason: str, punishment: str, proof: str = "None"):
     if not await is_cmd_channel(itx): return
     async def process_infraction(itx_select: discord.Interaction, hours: int):
         ts = get_pst_time(); expiry = (datetime.utcnow() + timedelta(hours=hours)).isoformat()
-        
         log_embed = discord.Embed(title="⚠️ **INFRACTION LOGGED**", color=GSP_RED)
         log_embed.description = f"{SEPARATOR}\n\n**Trooper:** {trooper.mention}\n**Reason:** {reason}\n**Expires:** {hours}h\n\n{SEPARATOR}"
         log_msg = await bot.get_channel(CHANNELS['infractions']).send(embed=log_embed)
-
         async with aiosqlite.connect(DATABASE) as db:
             await db.execute("INSERT INTO infractions (user_id, issuer_id, reason, punishment, proof, msg_url, expiry_timestamp, timestamp) VALUES (?,?,?,?,?,?,?,?)",
                              (trooper.id, itx.user.id, reason, punishment, proof, log_msg.jump_url, expiry, ts))
@@ -218,38 +308,6 @@ async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk_
             await db.commit()
         await itx_s.response.send_message(embed=embed)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpirySelect(callback)), ephemeral=True)
-
-@bot.tree.command(name="user_info", description="Get detailed info about a server member")
-@app_commands.describe(trooper="The member to search for")
-async def user_info(itx: discord.Interaction, trooper: discord.Member):
-    if not await is_cmd_channel(itx): return
-    
-    embed = discord.Embed(title=f"👤 **USER PROFILE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
-    embed.set_thumbnail(url=trooper.display_avatar.url)
-    
-    # Format dates
-    joined_date = trooper.joined_at.strftime("%B %d, %Y") if trooper.joined_at else "Unknown"
-    created_date = trooper.created_at.strftime("%B %d, %Y")
-    
-    embed.description = (
-        f"{SEPARATOR}\n\n"
-        f"**Mention:** {trooper.mention}\n"
-        f"**User ID:** `{trooper.id}`\n"
-        f"**Top Role:** {trooper.top_role.mention}\n"
-        f"**Joined GSP:** {joined_date}\n"
-        f"**Account Created:** {created_date}\n\n"
-        f"{SEPARATOR}"
-    )
-    await itx.response.send_message(embed=embed)
-
-@bot.tree.command(name="info", description="Bot information and bug reporting")
-async def info(itx: discord.Interaction):
-    if not await is_cmd_channel(itx): return
-    embed = discord.Embed(
-        description="If you find any bugs, please DM YaBoi_Napolean.",
-        color=GSP_CUSTOM_ORANGE
-    )
-    await itx.response.send_message(embed=embed)
 
 @bot.tree.command(name='trooper_performance', description='Trooper statistics')
 async def trooper_performance(itx: discord.Interaction, trooper: discord.Member):

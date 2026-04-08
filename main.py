@@ -219,9 +219,9 @@ async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk_
         await itx_s.response.send_message(embed=embed)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpirySelect(callback)), ephemeral=True)
 
-@bot.tree.command(name="search_user", description="Get detailed info about a server member")
+@bot.tree.command(name="user_info", description="Get detailed info about a server member")
 @app_commands.describe(trooper="The member to search for")
-async def search_user(itx: discord.Interaction, trooper: discord.Member):
+async def user_info(itx: discord.Interaction, trooper: discord.Member):
     if not await is_cmd_channel(itx): return
     
     embed = discord.Embed(title=f"👤 **USER PROFILE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
@@ -239,6 +239,15 @@ async def search_user(itx: discord.Interaction, trooper: discord.Member):
         f"**Joined GSP:** {joined_date}\n"
         f"**Account Created:** {created_date}\n\n"
         f"{SEPARATOR}"
+    )
+    await itx.response.send_message(embed=embed)
+
+@bot.tree.command(name="info", description="Bot information and bug reporting")
+async def info(itx: discord.Interaction):
+    if not await is_cmd_channel(itx): return
+    embed = discord.Embed(
+        description="If you find any bugs, please DM YaBoi_Napolean.",
+        color=GSP_CUSTOM_ORANGE
     )
     await itx.response.send_message(embed=embed)
 

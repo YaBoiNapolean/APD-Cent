@@ -25,7 +25,9 @@ CHANNELS = {
     'arrest_logs': 1486825085439443125,
     'citation_logs': 1486885813013844148,
     'infractions': 1486847816507719753,
-    'strike_confirm': 1486824029980463206
+    'strike_confirm': 1486824029980463206,
+    'bolo_logs': 1486825085439443125, # Update these if they have unique IDs
+    'warrant_logs': 1486825085439443125
 }
 
 # Role IDs
@@ -248,8 +250,10 @@ async def search_record(itx: discord.Interaction, record_id: str):
                         if row[5] != "N/A": e.set_image(url=row[5])
                     elif tbl == "citations":
                         e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Vehicle:** {row[3]}\n**Location:** {row[4]}\n**Reason:** {row[5]}\n**Date:** {row[6]}"
-                    else: # BOLOs/Warrants
-                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Expires:** {row[5 if tbl == 'warrants' else 6]}"
+                    elif tbl == "bolos":
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Vehicle:** {row[4]}\n**Plate:** {row[5]}\n**Reason:** {row[3]}\n**Expires:** {row[6]}\n**Date:** {row[7]}"
+                    else: # warrants
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Risk Level:** {row[4]}\n**Expires:** {row[5]}\n**Date:** {row[6]}"
                     e.set_footer(text=f"Logged by {off.display_name}")
                     return await itx.response.send_message(embed=e)
     await itx.response.send_message(f"❌ `{rid}` not found.", ephemeral=True)
@@ -307,40 +311,29 @@ async def search_user(itx: discord.Interaction, suspect_name: str):
 @app_commands.describe(secondaries="Names of assisting troopers", mugshot_url="Link to image")
 async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, secondaries: str = "N/A", mugshot_url: str = "N/A"):
     if not await is_cmd_channel(itx): return
-    
-    # Acknowledge first to prevent "did not respond"
     await itx.response.defer(ephemeral=True)
-    
     id_code, ts = await generate_unique_id(), get_pst_time()
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO arrests VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, secondaries, charges, mugshot_url, ts))
         await db.commit()
-    
     e = discord.Embed(title="**ARREST RECORD**", color=GSP_CUSTOM_ORANGE)
     e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Secondaries:** {secondaries}\n**Charges:** {charges}\n**Date:** {ts}"
-    if mugshot_url != "N/A" and mugshot_url.startswith("http"):
-        e.set_image(url=mugshot_url)
+    if mugshot_url != "N/A" and mugshot_url.startswith("http"): e.set_image(url=mugshot_url)
     e.set_footer(text=f"Logged by {itx.user.display_name}")
-    
     await bot.get_channel(CHANNELS['arrest_logs']).send(embed=e)
     await itx.followup.send(f"✅ Logged `{id_code}`")
 
 @bot.tree.command(name='citation_log', description='Record a citation')
 async def citation_log(itx: discord.Interaction, suspect: str, vehicle: str, location: str, reason: str):
     if not await is_cmd_channel(itx): return
-    
-    # Acknowledge first to prevent timeout
     await itx.response.defer(ephemeral=True)
-    
     id_code, ts = await generate_unique_id(), get_pst_time()
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO citations VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, vehicle, location, reason, ts))
         await db.commit()
-    
     e = discord.Embed(title="**CITATION RECORD**", color=GSP_YELLOW)
     e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Vehicle:** {vehicle}\n**Location:** {location}\n**Reason:** {reason}\n**Date:** {ts}"
     e.set_footer(text=f"Logged by {itx.user.display_name}")
-    
     await bot.get_channel(CHANNELS['citation_logs']).send(embed=e)
     await itx.followup.send(f"✅ Logged `{id_code}`")
 
@@ -352,9 +345,11 @@ async def bolo_log(itx: discord.Interaction, suspect: str, vehicle: str, reason:
         async with aiosqlite.connect(DATABASE) as db:
             await db.execute("INSERT INTO bolos VALUES (?,?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, reason, vehicle, plate, expire, ts))
             await db.commit()
-        e = discord.Embed(title="**BOLO ACTIVE**", description=f"**ID:** {id_code}\n**Suspect:** {suspect}", color=GSP_RED)
+        e = discord.Embed(title="**BOLO ACTIVE**", color=GSP_RED)
+        e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Vehicle:** {vehicle}\n**Plate:** {plate}\n**Reason:** {reason}\n**Date:** {ts}"
         e.set_footer(text=f"Logged by {itx.user.display_name}")
-        await itx_s.response.send_message(embed=e)
+        await bot.get_channel(CHANNELS['bolo_logs']).send(embed=e)
+        await itx_s.response.send_message(f"✅ BOLO `{id_code}` Issued.", ephemeral=True)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpiryDropdown(post_bolo)), ephemeral=True)
 
 @bot.tree.command(name='warrant_log', description='Issue a warrant')
@@ -365,9 +360,11 @@ async def warrant_log(itx: discord.Interaction, suspect: str, reason: str, risk:
         async with aiosqlite.connect(DATABASE) as db:
             await db.execute("INSERT INTO warrants VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, reason, risk, expire, ts))
             await db.commit()
-        e = discord.Embed(title="**WARRANT ACTIVE**", description=f"**ID:** {id_code}\n**Suspect:** {suspect}", color=GSP_RED)
+        e = discord.Embed(title="**WARRANT ACTIVE**", color=GSP_RED)
+        e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Reason:** {reason}\n**Risk Level:** {risk}\n**Date:** {ts}"
         e.set_footer(text=f"Logged by {itx.user.display_name}")
-        await itx_s.response.send_message(embed=e)
+        await bot.get_channel(CHANNELS['warrant_logs']).send(embed=e)
+        await itx_s.response.send_message(f"✅ Warrant `{id_code}` Issued.", ephemeral=True)
     await itx.response.send_message("Duration:", view=ui.View().add_item(ExpiryDropdown(post_war)), ephemeral=True)
 
 @bot.tree.command(name="user_info", description="Discord profile lookup")

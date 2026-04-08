@@ -85,11 +85,12 @@ async def is_cmd_channel(itx: discord.Interaction):
 # --- UI COMPONENTS ---
 
 class StrikeConfirmView(ui.View):
-    """Handles the Supervisor decision for a Strike Alert."""
-    def __init__(self, trooper: discord.Member, infraction_data: list):
+    def __init__(self, trooper: discord.Member, infraction_data: list, original_reason: str):
         super().__init__(timeout=None)
         self.trooper = trooper
+        self.infraction_data = infraction_data
         self.infraction_ids = [row[0] for row in infraction_data]
+        self.original_reason = original_reason
 
     @ui.button(label='Confirm Strike', style=discord.ButtonStyle.success)
     async def confirm_strike(self, itx: discord.Interaction, button: ui.Button):
@@ -97,8 +98,7 @@ class StrikeConfirmView(ui.View):
             return await itx.response.send_message("❌ Unauthorized.", ephemeral=True)
             
         s1, s2, ub = [itx.guild.get_role(ROLES[r]) for r in ['strike_1', 'strike_2', 'up_for_ban']]
-        target_role = s1
-        display_name = "Strike 1"
+        target_role, display_name = s1, "Strike 1"
 
         if ub in self.trooper.roles:
             return await itx.response.send_message("⚠️ Already Up For Termination.", ephemeral=True)
@@ -114,13 +114,18 @@ class StrikeConfirmView(ui.View):
                 await db.execute("UPDATE infractions SET is_processed = 1 WHERE id = ?", (inf_id,))
             await db.commit()
 
-        log_embed = discord.Embed(title="**STRIKE ACTION CONFIRMED**", color=GSP_RED)
-        log_embed.description = f"{SEPARATOR}\n**Trooper:** {self.trooper.mention}\n**New Status:** {display_name}\n{SEPARATOR}"
+        links = "\n".join([f"• [Infraction #{r[0]}]({r[1]})" for r in self.infraction_data])
+        log_embed = discord.Embed(title="**STRIKE**", color=GSP_RED)
+        log_embed.add_field(name="**Trooper:**", value=self.trooper.mention, inline=False)
+        log_embed.add_field(name="**Reason:**", value=self.original_reason, inline=False)
+        log_embed.add_field(name="**Infractions:**", value=links, inline=False)
+        log_embed.add_field(name="\u200b", value="\u200b", inline=False) 
+        log_embed.add_field(name="**Strike Level:**", value=f"`{display_name}`", inline=False)
         log_embed.set_footer(text=f"Confirmed by {itx.user.display_name}")
         
         inf_channel = bot.get_channel(CHANNELS['infractions'])
         if inf_channel: await inf_channel.send(content=f"{self.trooper.mention}", embed=log_embed)
-        await itx.response.edit_message(content="✅ Strike applied.", embed=log_embed, view=None)
+        await itx.response.edit_message(content=f"✅ Strike applied for {self.trooper.mention}.", embed=log_embed, view=None)
 
     @ui.button(label='Decline Strike', style=discord.ButtonStyle.danger)
     async def decline_strike(self, itx: discord.Interaction, button: ui.Button):
@@ -133,7 +138,27 @@ class StrikeConfirmView(ui.View):
             await db.commit()
 
         await itx.message.delete()
-        await itx.response.send_message(f"✅ Strike for {self.trooper.mention} was declined and infractions were cleared from strike-eligibility.", ephemeral=True)
+        await itx.response.send_message(f"✅ Strike for {self.trooper.mention} was declined.", ephemeral=True)
+
+class ClearRecordConfirm(ui.View):
+    def __init__(self, original_user, owner_id, record_id, table):
+        super().__init__(timeout=60)
+        self.original_user = original_user
+        self.owner_id = owner_id
+        self.record_id = record_id
+        self.table = table
+
+    @ui.button(label="Permanently Delete", style=discord.ButtonStyle.danger)
+    async def confirm_delete(self, itx: discord.Interaction, button: ui.Button):
+        if itx.user.id != self.original_user.id:
+            return await itx.response.send_message("❌ This is not your menu.", ephemeral=True)
+            
+        async with aiosqlite.connect(DATABASE) as db:
+            await db.execute(f"DELETE FROM {self.table} WHERE id_code = ?", (self.record_id,))
+            await db.commit()
+            
+        await itx.response.send_message(f"🗑️ Record `{self.record_id}` has been permanently deleted from **{self.table}**.", ephemeral=True)
+        await itx.message.delete()
 
 class ExpiryDropdown(ui.Select):
     def __init__(self, callback_func):
@@ -155,20 +180,6 @@ class InfractionExpiryDropdown(ui.Select):
     async def callback(self, itx: discord.Interaction):
         await self.callback_func(itx, int(self.values[0]))
 
-class ClearRecordConfirm(ui.View):
-    def __init__(self, original_user, officer_id, record_id, table):
-        super().__init__(timeout=60)
-        self.original_user, self.officer_id, self.record_id, self.table = original_user, int(officer_id), record_id, table
-    @ui.button(label="Permanently Delete", style=discord.ButtonStyle.danger)
-    async def confirm_delete(self, itx: discord.Interaction, button: ui.Button):
-        if itx.user.id != self.original_user.id: return await itx.response.send_message("❌ Not your menu.", ephemeral=True)
-        if itx.user.id != self.officer_id and itx.guild.get_role(ROLES['supervisor']) not in itx.user.roles: return await itx.response.send_message("❌ No permission.", ephemeral=True)
-        async with aiosqlite.connect(DATABASE) as db:
-            await db.execute(f"DELETE FROM {self.table} WHERE id_code = ?", (self.record_id,))
-            await db.commit()
-        await itx.response.send_message(f"🗑️ `{self.record_id}` deleted.", ephemeral=True)
-        await itx.message.delete()
-
 # --- COMMANDS ---
 
 @bot.tree.command(name='info', description='Bot support information')
@@ -177,6 +188,27 @@ async def info(itx: discord.Interaction):
     e = discord.Embed(description="If you have any questions or find any bugs, please DM **YaBoi_Napolean**.", color=GSP_CUSTOM_ORANGE)
     e.set_footer(text=f"Requested by {itx.user.display_name}")
     await itx.response.send_message(embed=e)
+
+@bot.tree.command(name='clear_record', description='Permanently delete a record')
+async def clear_record(itx: discord.Interaction, record_id: str):
+    if not await is_cmd_channel(itx): return
+    rid = record_id.upper()
+    async with aiosqlite.connect(DATABASE) as db:
+        found = False
+        for tbl in ["arrests", "citations", "bolos", "warrants"]:
+            async with db.execute(f"SELECT officer_id FROM {tbl} WHERE id_code = ?", (rid,)) as c:
+                row = await c.fetchone()
+                if row:
+                    found, target_tbl, owner_id = True, tbl, row[0]
+                    break
+        if not found:
+            return await itx.response.send_message(f"❌ Record `{rid}` not found.", ephemeral=True)
+
+        if itx.user.id != owner_id and itx.guild.get_role(ROLES['supervisor']) not in itx.user.roles:
+            return await itx.response.send_message("❌ Only the original officer or a Supervisor can delete this.", ephemeral=True)
+
+        await itx.response.send_message(f"⚠️ Are you sure you want to delete `{rid}` from **{target_tbl}**?", 
+                                       view=ClearRecordConfirm(itx.user, owner_id, rid, target_tbl), ephemeral=True)
 
 @bot.tree.command(name='trooper_performance', description='View trooper lifetime stats')
 async def trooper_performance(itx: discord.Interaction, trooper: discord.Member):
@@ -197,7 +229,7 @@ async def trooper_performance(itx: discord.Interaction, trooper: discord.Member)
 
     e = discord.Embed(title=f"**PERFORMANCE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
     e.description = f"{SEPARATOR}\n⚡ **Status:** `{cur}`\n🚨 **Arrests:** `{data[0]}`\n🎫 **Citations:** `{data[1]}`\n📡 **BOLOs:** `{data[2]}`\n⚖️ **Warrants:** `{data[3]}`\n⚠️ **Infractions:** `{inf}`\n{SEPARATOR}"
-    e.set_footer(text=f"Submitted by {itx.user.display_name}")
+    e.set_footer(text=f"Requested by {itx.user.display_name}")
     await itx.response.send_message(embed=e)
 
 @bot.tree.command(name='search_record', description='Search any GSP ID')
@@ -205,42 +237,20 @@ async def search_record(itx: discord.Interaction, record_id: str):
     if not await is_cmd_channel(itx): return
     rid = record_id.upper()
     async with aiosqlite.connect(DATABASE) as db:
-        # Search Arrests
-        async with db.execute("SELECT * FROM arrests WHERE id_code = ?", (rid,)) as c:
-            row = await c.fetchone()
-            if row:
-                off = await bot.fetch_user(row[2])
-                e = discord.Embed(title="**ARREST RECORD**", color=GSP_CUSTOM_ORANGE)
-                e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Charges:** {row[4]}\n**Date:** {row[6]}"
-                e.set_footer(text=f"Logged by {off.display_name}")
-                return await itx.response.send_message(embed=e)
-        # Search Citations
-        async with db.execute("SELECT * FROM citations WHERE id_code = ?", (rid,)) as c:
-            row = await c.fetchone()
-            if row:
-                off = await bot.fetch_user(row[2])
-                e = discord.Embed(title="**CITATION RECORD**", color=GSP_YELLOW)
-                e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[5]}\n**Date:** {row[6]}"
-                e.set_footer(text=f"Logged by {off.display_name}")
-                return await itx.response.send_message(embed=e)
-        # Search BOLOs
-        async with db.execute("SELECT * FROM bolos WHERE id_code = ?", (rid,)) as c:
-            row = await c.fetchone()
-            if row:
-                off = await bot.fetch_user(row[2])
-                e = discord.Embed(title="**BOLO RECORD**", color=GSP_RED)
-                e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Expires:** {row[6]}"
-                e.set_footer(text=f"Logged by {off.display_name}")
-                return await itx.response.send_message(embed=e)
-        # Search Warrants
-        async with db.execute("SELECT * FROM warrants WHERE id_code = ?", (rid,)) as c:
-            row = await c.fetchone()
-            if row:
-                off = await bot.fetch_user(row[2])
-                e = discord.Embed(title="**WARRANT RECORD**", color=GSP_RED)
-                e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Expires:** {row[5]}"
-                e.set_footer(text=f"Logged by {off.display_name}")
-                return await itx.response.send_message(embed=e)
+        for tbl, title, color in [("arrests", "**ARREST RECORD**", GSP_CUSTOM_ORANGE), ("citations", "**CITATION RECORD**", GSP_YELLOW), ("bolos", "**BOLO RECORD**", GSP_RED), ("warrants", "**WARRANT RECORD**", GSP_RED)]:
+            async with db.execute(f"SELECT * FROM {tbl} WHERE id_code = ?", (rid,)) as c:
+                row = await c.fetchone()
+                if row:
+                    off = await bot.fetch_user(row[2])
+                    e = discord.Embed(title=title, color=color)
+                    if tbl == "arrests":
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Charges:** {row[4]}\n**Date:** {row[6]}"
+                    elif tbl == "citations":
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[5]}\n**Date:** {row[6]}"
+                    else: # BOLOs/Warrants
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Expires:** {row[5 if tbl == 'warrants' else 6]}"
+                    e.set_footer(text=f"Logged by {off.display_name}")
+                    return await itx.response.send_message(embed=e)
     await itx.response.send_message(f"❌ `{rid}` not found.", ephemeral=True)
 
 @bot.tree.command(name='infraction_log', description='Log misconduct')
@@ -265,16 +275,15 @@ async def infraction_log(itx: discord.Interaction, trooper: discord.Member, reas
                 next_lvl = "Strike 1"
                 if s2 in trooper.roles: next_lvl = "Up For Termination"
                 elif s1 in trooper.roles: next_lvl = "Strike 2"
-                
                 links = "\n".join([f"• [Infraction #{r[0]}]({r[1]})" for r in rows])
                 alert = discord.Embed(title="**⚖️ STRIKE ELIGIBILITY ALERT**", color=GSP_RED)
                 alert.add_field(name="**Trooper:**", value=trooper.mention, inline=False)
                 alert.add_field(name="**Reason:**", value=reason, inline=False)
                 alert.add_field(name="**Infractions:**", value=links, inline=False)
-                alert.add_field(name="\u200b", value="\u200b", inline=False) # Vertical Space
+                alert.add_field(name="\u200b", value="\u200b", inline=False) 
                 alert.add_field(name="**Strike level after confirmation:**", value=f"`{next_lvl}`", inline=False)
-                alert.set_footer(text=f"Requested by {itx.user.display_name}")
-                await bot.get_channel(CHANNELS['strike_confirm']).send(content=f"{trooper.mention}", embed=alert, view=StrikeConfirmView(trooper, rows))
+                alert.set_footer(text="This is an automated message sent by GSP Central systems")
+                await bot.get_channel(CHANNELS['strike_confirm']).send(content=f"{trooper.mention}", embed=alert, view=StrikeConfirmView(trooper, rows, reason))
         await itx_select.response.send_message("✅ Infraction logged.", ephemeral=True)
     await itx.response.send_message("Select Duration:", view=ui.View().add_item(InfractionExpiryDropdown(complete_infraction)), ephemeral=True)
 
@@ -290,7 +299,7 @@ async def search_user(itx: discord.Interaction, suspect_name: str):
     w_t = "\n".join([f"• `{w[0]}`: {w[1]}" for w in warrants]) if warrants else "None"
     b_t = "\n".join([f"• `{b[0]}`: {b[1]}" for b in bolos]) if bolos else "None"
     e.description = f"{SEPARATOR}\n**Warrants:** {w_t}\n**BOLOs:** {b_t}\n**Last Arrest:** {format_time_ago(last_arrest[0]) if last_arrest else 'No priors.'}\n{SEPARATOR}"
-    e.set_footer(text=f"Submitted by {itx.user.display_name}")
+    e.set_footer(text=f"Requested by {itx.user.display_name}")
     await itx.response.send_message(embed=e)
 
 @bot.tree.command(name='arrest_log', description='Record an arrest')
@@ -350,7 +359,7 @@ async def user_info(itx: discord.Interaction, trooper: discord.Member):
     if not await is_cmd_channel(itx): return
     e = discord.Embed(title=f"**PROFILE: {trooper.display_name}**", color=GSP_CUSTOM_ORANGE)
     e.description = f"{SEPARATOR}\n**ID:** `{trooper.id}`\n**Join Date:** {trooper.joined_at.strftime('%Y-%m-%d')}\n{SEPARATOR}"
-    e.set_footer(text=f"Submitted by {itx.user.display_name}")
+    e.set_footer(text=f"Requested by {itx.user.display_name}")
     await itx.response.send_message(embed=e)
 
 @bot.event

@@ -244,9 +244,10 @@ async def search_record(itx: discord.Interaction, record_id: str):
                     off = await bot.fetch_user(row[2])
                     e = discord.Embed(title=title, color=color)
                     if tbl == "arrests":
-                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Charges:** {row[4]}\n**Date:** {row[6]}"
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Secondaries:** {row[3]}\n**Charges:** {row[4]}\n**Date:** {row[6]}"
+                        if row[5] != "N/A": e.set_image(url=row[5])
                     elif tbl == "citations":
-                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[5]}\n**Date:** {row[6]}"
+                        e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Vehicle:** {row[3]}\n**Location:** {row[4]}\n**Reason:** {row[5]}\n**Date:** {row[6]}"
                     else: # BOLOs/Warrants
                         e.description = f"**ID:** {row[0]}\n**Officer:** {off.mention}\n**Suspect:** {row[1]}\n**Reason:** {row[3]}\n**Expires:** {row[5 if tbl == 'warrants' else 6]}"
                     e.set_footer(text=f"Logged by {off.display_name}")
@@ -303,30 +304,45 @@ async def search_user(itx: discord.Interaction, suspect_name: str):
     await itx.response.send_message(embed=e)
 
 @bot.tree.command(name='arrest_log', description='Record an arrest')
-async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, secondaries: str = "None", mugshot_url: str = "None"):
+@app_commands.describe(secondaries="Names of assisting troopers", mugshot_url="Link to image")
+async def arrest_log(itx: discord.Interaction, suspect: str, charges: str, secondaries: str = "N/A", mugshot_url: str = "N/A"):
     if not await is_cmd_channel(itx): return
+    
+    # Acknowledge first to prevent "did not respond"
+    await itx.response.defer(ephemeral=True)
+    
     id_code, ts = await generate_unique_id(), get_pst_time()
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO arrests VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, secondaries, charges, mugshot_url, ts))
         await db.commit()
-    e = discord.Embed(title="**ARREST LOGGED**", color=GSP_CUSTOM_ORANGE)
-    e.description = f"**ID:** {id_code}\n**Suspect:** {suspect}\n**Charges:** {charges}"
-    if mugshot_url != "None": e.set_image(url=mugshot_url)
+    
+    e = discord.Embed(title="**ARREST RECORD**", color=GSP_CUSTOM_ORANGE)
+    e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Secondaries:** {secondaries}\n**Charges:** {charges}\n**Date:** {ts}"
+    if mugshot_url != "N/A" and mugshot_url.startswith("http"):
+        e.set_image(url=mugshot_url)
     e.set_footer(text=f"Logged by {itx.user.display_name}")
+    
     await bot.get_channel(CHANNELS['arrest_logs']).send(embed=e)
-    await itx.response.send_message(f"✅ Logged `{id_code}`", ephemeral=True)
+    await itx.followup.send(f"✅ Logged `{id_code}`")
 
 @bot.tree.command(name='citation_log', description='Record a citation')
 async def citation_log(itx: discord.Interaction, suspect: str, vehicle: str, location: str, reason: str):
     if not await is_cmd_channel(itx): return
+    
+    # Acknowledge first to prevent timeout
+    await itx.response.defer(ephemeral=True)
+    
     id_code, ts = await generate_unique_id(), get_pst_time()
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO citations VALUES (?,?,?,?,?,?,?)", (id_code, suspect, itx.user.id, vehicle, location, reason, ts))
         await db.commit()
-    e = discord.Embed(title="**CITATION ISSUED**", color=GSP_YELLOW, description=f"**ID:** {id_code}\n**Suspect:** {suspect}\n**Reason:** {reason}")
+    
+    e = discord.Embed(title="**CITATION RECORD**", color=GSP_YELLOW)
+    e.description = f"**ID:** {id_code}\n**Officer:** {itx.user.mention}\n**Suspect:** {suspect}\n**Vehicle:** {vehicle}\n**Location:** {location}\n**Reason:** {reason}\n**Date:** {ts}"
     e.set_footer(text=f"Logged by {itx.user.display_name}")
+    
     await bot.get_channel(CHANNELS['citation_logs']).send(embed=e)
-    await itx.response.send_message(f"✅ Logged `{id_code}`", ephemeral=True)
+    await itx.followup.send(f"✅ Logged `{id_code}`")
 
 @bot.tree.command(name='bolo_log', description='Issue a BOLO')
 async def bolo_log(itx: discord.Interaction, suspect: str, vehicle: str, reason: str, plate: str = "Unknown"):

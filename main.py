@@ -9,8 +9,8 @@ from discord import app_commands, ui
 from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURATION ---
-# Use local path for Railway unless a Volume is specifically mounted at /data/
-DATABASE = 'gsp_bot.db' 
+# Restored to /data/ for your mounted Railway Volume
+DATABASE = '/data/gsp_bot.db' 
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -59,6 +59,9 @@ def format_time_ago(ts_string):
         return "Unknown"
 
 async def init_db():
+    db_dir = os.path.dirname(DATABASE)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute('''CREATE TABLE IF NOT EXISTS arrests (id_code TEXT PRIMARY KEY, suspect TEXT, officer_id INTEGER, secondaries TEXT, charges TEXT, mugshot TEXT, timestamp TEXT)''')
         await db.execute('''CREATE TABLE IF NOT EXISTS citations (id_code TEXT PRIMARY KEY, suspect TEXT, officer_id INTEGER, vehicle TEXT, location TEXT, reason TEXT, timestamp TEXT)''')

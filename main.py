@@ -22,21 +22,21 @@ GSP_YELLOW = 0xFFFF00
 SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Channel IDs
-CMD_CHANNEL_ID = 1486886286081130526
+CMD_CHANNEL_ID = 1491403907329556630
 CHANNELS = {
-    'arrest_logs': 1486825085439443125,
-    'citation_logs': 1486885813013844148,
-    'infractions': 1486847816507719753,
-    'strike_confirm': 1486824029980463206
+    'arrest_logs': 1491396788287045784,
+    'citation_logs': 1491401885280637031,
+    'infractions': 1491402935341678634,
+    'strike_confirm': 1491893789952835584
 }
 
 # Role IDs
 ROLES = {
-    'strike_1': 1486876700242608268,
-    'strike_2': 1486876780190105630,
-    'up_for_ban': 1486876910905593866,
-    'strike_confirmer': 1486883804550398053,
-    'supervisor': 1486824300857262140
+    'strike_1': 1489800614098505858,
+    'strike_2': 1489800660978499727,
+    'up_for_ban': 1489800716452102255,
+    'strike_confirmer': 1491765593639096351,
+    'supervisor': 1491916962861940947
 }
 
 # --- DATABASE & UTILITIES ---

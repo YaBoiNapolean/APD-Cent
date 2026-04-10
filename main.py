@@ -198,7 +198,7 @@ async def clear_all_data(itx: discord.Interaction):
 @bot.tree.command(name='info', description='Bot support information')
 async def info(itx: discord.Interaction):
     if not await is_cmd_channel(itx): return
-    e = discord.Embed(description=f"{SEPARATOR}\nQuestions/Bugs: DM **YaBoi_Napolean**.\n{SEPARATOR}", color=GSP_CUSTOM_ORANGE)
+    e = discord.Embed(title="**INFORMATION**", description=f"{SEPARATOR}\nQuestions/Bugs: DM **1K-96 | DOGGO123**.\n{SEPARATOR}", color=GSP_CUSTOM_ORANGE)
     e.set_footer(text=f"Requested by {itx.user.display_name}")
     await itx.response.send_message(embed=e)
 
